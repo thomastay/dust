@@ -12,6 +12,8 @@ use std::cmp::max;
 use std::cmp::min;
 use std::iter::repeat;
 use std::path::Path;
+use std::collections::HashMap;
+use std::env;
 
 static UNITS: [char; 4] = ['T', 'G', 'M', 'K'];
 static BLOCKS: [char; 5] = ['█', '▓', '▒', '░', ' '];
@@ -132,6 +134,73 @@ fn get_width_of_terminal() -> u16 {
         DEFAULT_TERMINAL_WIDTH
     }
 }
+
+fn get_color(path: &Path, color_dict_chmod : HashMap<String, String>, color_dict_filetype: HashMap<String, String>) -> Option<&String>{
+    let p = get_permissions(path);
+    if path.is_dir() {
+        if p & 0o200 != 0 {
+            if let Some(col) = color_dict_chmod.get("ow") {
+                return Some(col)
+            }
+        }
+        if let Some(col) = color_dict_chmod.get("di") {
+            return Some(col)
+        }
+    }
+    if p & 0o111 != 0 {
+        if let Some(col) = color_dict_chmod.get("ex") {
+            return Some(col)
+        }
+    }
+    if let Some(col) = color_dict_filetype.get(&path.extension().into()) {
+        return Some(col)
+    }
+    if path.is_file() {
+        if let Some(col) = color_dict_chmod.get( &"fi".to_string() ) {
+            return Some(col)
+        }
+    }
+    return None 
+    // println!("permissions: {:o}", p);
+    // // 0o200 = Do I have write mode
+    // // if p & 0o200 != 0
+    // // do I have an executable
+    // // if p & 0o111 != 0
+    // println!("me  permissions: {:o} {:o} {:o}", p & 0o200, p & 0o020, p & 0o002);
+    // println!("dut permissions: {:o}", permissions.mode() & 0o002);
+    // Ok(()) 
+}
+
+fn create_color_dict() -> (HashMap<String, String>, HashMap<String, String>) {
+    let env_str = env::var("LS_COLORS").unwrap_or( "".to_string() );
+    let colors  = env_str.split(':');
+    let mut color_dict_chmod = HashMap::with_capacity( colors.size_hint().0 );
+    let mut color_dict_filetype = HashMap::with_capacity( colors.size_hint().0 );
+
+    for entry in colors {
+        let mut iterr = entry.split('=');
+        let file = iterr.next();
+        let color = iterr.next();
+
+        if let Some(f) = file {
+            if let Some(c) = color{
+                if f.contains("*.") {
+                    color_dict_chmod.insert(f.into(), entry.replace("*.", ""));
+                } else {
+                    color_dict_filetype.insert(f.into(), c.into());
+                }
+            }
+        }
+    }
+    (color_dict_chmod, color_dict_filetype)
+}
+
+// "di" - dir
+// "fi" -file
+// "su / sg" permissions
+// tw 	STICKY_OTHER_WRITABLE 	Directory that is sticky and other-writable (+t,o+w)
+// ow 	OTHER_WRITABLE 	Directory that is other-writable (o+w) and not sticky 
+
 
 pub fn draw_it(
     permissions: bool,
@@ -268,6 +337,9 @@ pub fn format_string(
     is_biggest: bool,
     display_data: &DisplayData,
 ) -> String {
+    let (a,b) = create_color_dict();
+    println!("{:?}", get_color(&node.name, a, b));
+
     let pretty_size = format!("{:>5}", human_readable_number(node.size));
 
     let percent_size = display_data.percent_size(node);

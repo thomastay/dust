@@ -54,3 +54,21 @@ pub fn get_filesystem<P: AsRef<Path>>(file_path: P) -> Result<u64, io::Error> {
     let info = information(&h)?;
     Ok(info.volume_serial_number())
 }
+
+#[cfg(target_family = "unix")]
+fn get_permissions(path: &Path) -> Option<u32>{
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = path.metadata();
+    if let Ok(md) = metadata {
+        let permissions = md.permissions();
+        Some(permissions.mode())
+    } else {
+        None
+    }
+}
+
+// PRs welcome to fill this in
+#[cfg(target_family = "windows")]
+fn get_permissions(path: &Path) -> Option<u32>{
+    None
+}
