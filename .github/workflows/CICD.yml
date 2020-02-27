@@ -6,7 +6,7 @@ env:
   PROJECT_NAME: dust
   PROJECT_DESC: "du + rust = dust"
   PROJECT_AUTH: "bootandy"
-  RUST_MIN_SRV: "1.31.0"
+  RUST_MIN_SRV: "1.41.0"
 
 on: [push, pull_request]
 
