@@ -44,7 +44,6 @@ pub fn get_filesystem<P: AsRef<Path>>(file_path: P) -> Result<u64, io::Error> {
     let metadata = fs::metadata(file_path)?;
     Ok(metadata.dev())
 }
-
 #[cfg(target_family = "windows")]
 pub fn get_filesystem<P: AsRef<Path>>(file_path: P) -> Result<u64, io::Error> {
     use winapi_util::file::information;
