@@ -193,13 +193,13 @@ jobs:
       with:
         use-cross: ${{ steps.vars.outputs.CARGO_USE_CROSS }}
         command: build
-        args: --release --target=${{ matrix.job.target }} ${{ matrix.job.cargo-options }} --features "${{ matrix.job.features }}"
+        args: --release --target=${{ matrix.job.target }} ${{ matrix.job.cargo-options }} 
     - name: Test
       uses: actions-rs/cargo@v1
       with:
         use-cross: ${{ steps.vars.outputs.CARGO_USE_CROSS }}
         command: test
-        args: --target=${{ matrix.job.target }} ${{ steps.vars.outputs.CARGO_TEST_OPTIONS}} ${{ matrix.job.cargo-options }} --features "${{ matrix.job.features }}"
+        args: --target=${{ matrix.job.target }} ${{ steps.vars.outputs.CARGO_TEST_OPTIONS}} ${{ matrix.job.cargo-options }}
     - name: Archive executable artifacts
       uses: actions/upload-artifact@master
       with:
