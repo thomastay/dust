@@ -183,13 +183,16 @@ fn main() {
         limit_filesystem,
         threads,
     );
+    println!("pre sort");
     let sorted_data = sort(nodes);
+    println!("post sort");
     let biggest_ones = {
         match depth {
             None => find_big_ones(sorted_data, number_of_lines + simplified_dirs.len()),
             Some(d) => trim_deep_ones(sorted_data, d, &simplified_dirs),
         }
     };
+    println!("pre draw");
     let tree = build_tree(biggest_ones, depth);
 
     draw_it(

@@ -1,10 +1,13 @@
-use jwalk::DirEntry;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Sender, Receiver};
+use std::thread;
+use std::sync::*;
 
-use jwalk::WalkDir;
+use walkdir::WalkDir;
+use walkdir::DirEntry;
 
 mod platform;
 use self::platform::*;
@@ -76,30 +79,35 @@ pub fn get_dir_tree<P: AsRef<Path>>(
     apparent_size: bool,
     limit_filesystem: bool,
     threads: Option<usize>,
-) -> (bool, HashMap<PathBuf, u64>) {
-    let mut permissions = 0;
-    let mut data: HashMap<PathBuf, u64> = HashMap::new();
+) -> (bool, Arc<Mutex<HashMap<PathBuf, u64>>>) {
     let restricted_filesystems = if limit_filesystem {
         get_allowed_filesystems(top_level_names)
     } else {
         None
     };
 
-    let mut examine_dir_args = ExamineDirMutArsg {
-        data: &mut data,
-        file_count_no_permission: &mut permissions,
-    };
+    //let mut permissions = 0;
+    let data: HashMap<PathBuf, u64> = HashMap::new();
+    let md2 = Arc::new(Mutex::new(data));
+
     for b in top_level_names.iter() {
-        examine_dir(
-            b,
+        // let mut examine_dir_args = ExamineDirMutArsg {
+        //     data: &mut data,
+        //     file_count_no_permission: &mut permissions,
+        // };
+        let md = md2.clone();
+        let res = examine_dir(
+            b.as_ref(),
             apparent_size,
             &restricted_filesystems,
             ignore_directories,
             threads,
-            &mut examine_dir_args,
+            md,
         );
+        //return (false, res)
+        //return (permissions == 0, data)
     }
-    (permissions == 0, data)
+    return (false, md2.clone())
 }
 
 fn get_allowed_filesystems<P: AsRef<Path>>(top_level_names: &HashSet<P>) -> Option<HashSet<u64>> {
@@ -122,30 +130,105 @@ pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     path.as_ref().components().collect::<PathBuf>()
 }
 
+// todo: spelling:
 struct ExamineDirMutArsg<'a> {
     data: &'a mut HashMap<PathBuf, u64>,
     file_count_no_permission: &'a mut u64,
 }
 
-fn examine_dir<P: AsRef<Path>>(
-    top_dir: P,
+struct IsFinished(bool);
+
+fn do_walk(tx: Sender<DirEntry>, flag: Arc<Mutex<IsFinished>>, wd: WalkDir) {
+    for entry in wd.into_iter().filter_map(|e| e.ok()) {
+        tx.send(entry).unwrap()
+    }
+    let mut is_done = flag.lock().unwrap();
+    is_done.0 = true;
+}
+
+fn do_read(
+    rx: Receiver<DirEntry>, 
+    flag : Arc<Mutex<IsFinished>>,
+    ignore_directories: Option<Vec<PathBuf>>,
+    mut_args: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    apparent_size: bool,
+    top_dir: String,
+) {
+    let mut inodes: HashSet<(u64, u64)> = HashSet::new();
+    let mut count = 0;
+    let mut ma = mut_args;
+
+    while !flag.lock().unwrap().0 {
+        let s = rx.recv();
+        match s {
+            Ok(ss) => handle_thing(ss, &mut inodes, &ignore_directories, ma.clone(), apparent_size, top_dir.clone()),
+            Err(r) => eprintln!("problem: {:?}", r)
+        }
+        //println!("from reader: {:?}", s);
+        count += 1;
+    }
+    println!("-------------------------");
+    let mut s = rx.recv();
+    while s.is_ok() {
+        match s {
+            Ok(ss) => handle_thing(ss, &mut inodes, &ignore_directories, ma.clone(), apparent_size, top_dir.clone()),
+            Err(r) => eprintln!("problem: {:?}", r)
+        }
+        s = rx.recv();
+        count += 1;
+    }
+    println!("count: {}", count);
+}
+
+fn examine_dir<'life>(
+    top_dir: &Path,
     apparent_size: bool,
     filesystems: &Option<HashSet<u64>>,
     ignore_directories: &Option<Vec<PathBuf>>,
     threads: Option<usize>,
-    mut_args: &mut ExamineDirMutArsg,
-) {
-    let top_dir = top_dir.as_ref();
-    let mut inodes: HashSet<(u64, u64)> = HashSet::new();
-    let mut iter = WalkDir::new(top_dir)
-        .preload_metadata(true)
-        .skip_hidden(false);
-    if let Some(threads_to_start) = threads {
-        iter = iter.num_threads(threads_to_start);
-    }
+    md: Arc<Mutex<HashMap<PathBuf, u64>>>,
+) { 
+//-> ExamineDirMutArsg<'life> {
 
-    'entry: for entry in iter {
-        if let Ok(e) = entry {
+    let id = ignore_directories.clone();
+
+    let (tx, rx): (Sender<DirEntry>, Receiver<DirEntry>) = mpsc::channel();
+
+    let arc = Arc::new(Mutex::new(IsFinished(false)));
+    let arc_c = arc.clone();
+
+
+    // let mut permissions = 0;
+    // let mut data: HashMap<PathBuf, u64> = HashMap::new();
+    // let mut examine_dir_args = ExamineDirMutArsg {
+    //     data: &mut data,
+    //     file_count_no_permission: &mut permissions,
+    // };
+    // let ma2 = Arc::new(Mutex::new(examine_dir_args));
+
+    // let mut_args_c = ma2.clone();
+
+    let wd = WalkDir::new(top_dir.clone());
+
+    let reader = thread::spawn(move || do_walk(tx, arc, wd));
+
+    let tp = top_dir.as_os_str().to_owned().into_string().unwrap();
+    let receiver = thread::spawn(move || do_read(rx, arc_c, id, md, apparent_size, tp));
+
+    reader.join();
+    receiver.join();
+}
+
+fn handle_thing(
+    e: DirEntry, 
+    mut inodes: &mut HashSet<(u64, u64)>,
+    ignore_directories: &Option<Vec<PathBuf>>,
+    mut_args: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    apparent_size: bool,
+    top_dir: String,
+) {
+    //let top_dir = top_dir.as_ref();
+
             let maybe_size_and_inode = get_metadata(&e, apparent_size);
 
             if let Some(dirs) = ignore_directories {
@@ -157,7 +240,7 @@ fn examine_dir<P: AsRef<Path>>(
                         .windows(seq.len())
                         .any(|window| window.iter().collect::<PathBuf>() == *d)
                     {
-                        continue 'entry;
+                        return
                     }
                 }
             }
@@ -165,16 +248,13 @@ fn examine_dir<P: AsRef<Path>>(
             match maybe_size_and_inode {
                 Some(data) => {
                     let (size, inode_device) = data;
-                    if !should_ignore_file(apparent_size, filesystems, &mut inodes, inode_device) {
-                        process_file_with_size_and_inode(top_dir, mut_args.data, e, size)
-                    }
+                    // todo none should be filesystems
+                    //if !should_ignore_file(apparent_size, &None, &mut inodes, inode_device) {
+                        process_file_with_size_and_inode(top_dir, mut_args, e, size)
+                    //}
                 }
-                None => *mut_args.file_count_no_permission += 1,
+                None => {} //*mut_args.lock().unwrap().file_count_no_permission += 1,
             }
-        } else {
-            *mut_args.file_count_no_permission += 1
-        }
-    }
 }
 
 fn should_ignore_file(
@@ -206,26 +286,29 @@ fn should_ignore_file(
     }
 }
 
-fn process_file_with_size_and_inode<P: AsRef<Path>>(
-    top_dir: P,
-    data: &mut HashMap<PathBuf, u64>,
+fn process_file_with_size_and_inode(
+    top_dir: String,
+    //data: &mut HashMap<PathBuf, u64>,
+    data: Arc<Mutex<HashMap<PathBuf, u64>>>,
     e: DirEntry,
     size: u64,
 ) {
-    let top_dir = top_dir.as_ref();
+    let mut ss = data.lock().unwrap();
+    let s = ss.entry(normalize_path(e.path())).or_insert(0);
     // This path and all its parent paths have their counter incremented
-    for path in e.path().ancestors() {
-        // This is required due to bug in Jwalk that adds '/' to all sub dir lists
-        // see: https://github.com/jessegrosjean/jwalk/issues/13
-        if path.to_string_lossy() == "/" && top_dir.to_string_lossy() != "/" {
-            continue;
-        }
-        let s = data.entry(normalize_path(path)).or_insert(0);
-        *s += size;
-        if path.starts_with(top_dir) && top_dir.starts_with(path) {
-            break;
-        }
-    }
+    // for path in e.path().ancestors() {
+    //     // // This is required due to bug in Jwalk that adds '/' to all sub dir lists
+    //     // // see: https://github.com/jessegrosjean/jwalk/issues/13
+    //     // if path.to_string_lossy() == "/" && top_dir.to_string_lossy() != "/" {
+    //     //     continue;
+    //     // }
+    //     let mut ss = data.lock().unwrap();
+    //     let s = ss.entry(normalize_path(path)).or_insert(0);
+    //     *s + size;
+    //     if path.starts_with(top_dir.clone()) && top_dir.starts_with(path.to_str().unwrap()) {
+    //         break;
+    //     }
+    // }
 }
 
 pub fn sort_by_size_first_name_second(a: &(PathBuf, u64), b: &(PathBuf, u64)) -> Ordering {
@@ -237,8 +320,8 @@ pub fn sort_by_size_first_name_second(a: &(PathBuf, u64), b: &(PathBuf, u64)) ->
     }
 }
 
-pub fn sort(data: HashMap<PathBuf, u64>) -> Vec<(PathBuf, u64)> {
-    let mut new_l: Vec<(PathBuf, u64)> = data.iter().map(|(a, b)| (a.clone(), *b)).collect();
+pub fn sort(data: Arc<Mutex<HashMap<PathBuf, u64>>>) -> Vec<(PathBuf, u64)> {
+    let mut new_l: Vec<(PathBuf, u64)> = data.lock().unwrap().iter().map(|(a, b)| (a.clone(), *b)).collect();
     new_l.sort_unstable_by(sort_by_size_first_name_second);
     new_l
 }
