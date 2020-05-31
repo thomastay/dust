@@ -130,7 +130,7 @@ impl DrawData<'_> {
 fn get_width_of_terminal() -> u16 {
     // Windows CI runners detect a very low terminal width
     if let Some((Width(w), Height(_h))) = terminal_size() {
-        max(w, DEFAULT_TERMINAL_WIDTH)
+        w
     } else {
         DEFAULT_TERMINAL_WIDTH
     }
