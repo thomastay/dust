@@ -95,6 +95,7 @@ fn get_children_from_node(node: Node, is_reversed: bool) -> impl Iterator<Item =
 
 struct DrawData<'a> {
     indent: String,
+    level: usize,
     percent_bar: String,
     display_data: &'a DisplayData,
 }
@@ -106,7 +107,7 @@ impl DrawData<'_> {
     }
 
     // can we test this?
-    fn generate_bar(&self, node: &Node, level: usize) -> String {
+    fn generate_bar(&self, node: &Node, level: usize) -> (String, usize) {
         let chars_in_bar = self.percent_bar.chars().count();
         let num_bars = chars_in_bar as f32 * self.display_data.percent_size(node);
         let mut num_not_my_bar = (chars_in_bar as i32) - num_bars as i32;
@@ -124,7 +125,13 @@ impl DrawData<'_> {
                 new_bar.push(c);
             }
         }
-        new_bar
+        // The idea is that we only incrememnt the level if we have used a new color.
+        // So if the bar we built is exactly the same as the previous one we don't need to use a new color
+        if new_bar != self.percent_bar {
+            (new_bar, level + 1)
+        } else {
+            (new_bar, level)
+        }
     }
 }
 
@@ -175,6 +182,7 @@ pub fn draw_it(
         };
         let draw_data = DrawData {
             indent: "".to_string(),
+            level: 1,
             percent_bar: bar_text.clone(),
             display_data: &display_data,
         };
@@ -199,8 +207,7 @@ fn find_longest_dir_name(node: &Node, indent: &str, long_paths: bool) -> usize {
 fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: bool) {
     let indent2 = draw_data.get_new_indent(!node.children.is_empty(), is_last);
     // hacky way of working out how deep we are in the tree
-    let level = ((indent2.chars().count() - 1) / 2) - 1;
-    let bar_text = draw_data.generate_bar(&node, level);
+    let (bar_text, new_level) = draw_data.generate_bar(&node, draw_data.level as usize);
 
     let to_print = format_string(
         &node,
@@ -216,6 +223,7 @@ fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: boo
 
     let dd = DrawData {
         indent: clean_indentation_string(&*indent2),
+        level: new_level,
         percent_bar: bar_text,
         display_data: draw_data.display_data,
     };
