@@ -208,7 +208,12 @@ fn output_apparent_size() -> String {
 pub fn test_reverse_flag() {
     initialize();
     let mut cmd = Command::cargo_bin("dust").unwrap();
-    let output = cmd.arg("-c").arg("-r").arg("/tmp/test_dir/").unwrap().stdout;
+    let output = cmd
+        .arg("-c")
+        .arg("-r")
+        .arg("/tmp/test_dir/")
+        .unwrap()
+        .stdout;
     let output = str::from_utf8(&output).unwrap();
 
     assert!(output.contains(" └─┬ test_dir "));
