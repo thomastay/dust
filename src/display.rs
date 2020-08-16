@@ -142,13 +142,25 @@ pub fn draw_it(
     is_reversed: bool,
     no_colors: bool,
     no_percents: bool,
+    by_filecount: bool,
     root_node: Node,
 ) {
     if !permissions {
         eprintln!("Did not have permissions for all directories");
     }
-    let terminal_width = (get_width_of_terminal() - 16) as usize;
+    let longest_num = if by_filecount {
+        human_readable_number(
+            root_node.children.iter().map(|n| n.size).fold(0, max),
+            by_filecount,
+        )
+        .len()
+    } else {
+        5
+    };
+    //let terminal_width = (get_width_of_terminal() - 16) as usize;
+    let terminal_width = get_width_of_terminal() as usize - (9 + longest_num);
     let num_indent_chars = 3;
+
     let longest_string_length = root_node
         .children
         .iter()
@@ -177,7 +189,7 @@ pub fn draw_it(
             percent_bar: first_size_bar.clone(),
             display_data: &display_data,
         };
-        display_node(c, &draw_data, true, true);
+        display_node(c, &draw_data, longest_num, true, true, by_filecount);
     }
 }
 
@@ -195,7 +207,14 @@ fn find_longest_dir_name(node: &Node, indent: usize, terminal: usize, long_paths
         .fold(longest, max)
 }
 
-fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: bool) {
+fn display_node(
+    node: Node,
+    draw_data: &DrawData,
+    longest_num: usize,
+    is_biggest: bool,
+    is_last: bool,
+    display_count: bool,
+) {
     // hacky way of working out how deep we are in the tree
     let indent = draw_data.get_new_indent(!node.children.is_empty(), is_last);
     let level = ((indent.chars().count() - 1) / 2) - 1;
@@ -203,9 +222,11 @@ fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: boo
 
     let to_print = format_string(
         &node,
+        longest_num,
         &*indent,
         &*bar_text,
         is_biggest,
+        display_count,
         draw_data.display_data,
     );
 
@@ -223,7 +244,7 @@ fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: boo
     for (count, c) in get_children_from_node(node, draw_data.display_data.is_reversed).enumerate() {
         let is_biggest = dd.display_data.is_biggest(count, num_siblings);
         let was_i_last = dd.display_data.is_last(count, num_siblings);
-        display_node(c, &dd, is_biggest, was_i_last);
+        display_node(c, &dd, longest_num, is_biggest, was_i_last, display_count);
     }
 
     if draw_data.display_data.is_reversed {
@@ -294,11 +315,30 @@ fn maybe_trim_filename(name_in: String, display_data: &DisplayData) -> String {
 
 pub fn format_string(
     node: &Node,
+    longest_num: usize,
     indent: &str,
     percent_bar: &str,
     is_biggest: bool,
+    display_count: bool,
     display_data: &DisplayData,
 ) -> String {
+    let pretty_size = {
+        if display_count {
+            format!(
+                "{0:>1$}",
+                human_readable_number(node.size, display_count),
+                longest_num,
+            )
+        } else {
+            let pretty_size = format!("{:>5}", human_readable_number(node.size, display_count));
+            if is_biggest && display_data.colors_on {
+                format!("{}", Red.paint(pretty_size))
+            } else {
+                pretty_size
+            }
+        }
+    };
+
     let (percents, name_and_padding) = if percent_bar != "" {
         let percent_size_str = format!("{:.0}%", display_data.percent_size(node) * 100.0);
         let percents = format!("│{} │ {:>4}", percent_bar, percent_size_str);
@@ -308,13 +348,6 @@ pub fn format_string(
         let n = get_printable_name(&node.name, display_data.short_paths);
         let name = maybe_trim_filename(n, display_data);
         ("".into(), name)
-    };
-
-    let pretty_size = format!("{:>5}", human_readable_number(node.size));
-    let pretty_size = if is_biggest && display_data.colors_on {
-        format!("{}", Red.paint(pretty_size))
-    } else {
-        pretty_size
     };
 
     let pretty_name = if display_data.colors_on {
@@ -334,18 +367,23 @@ pub fn format_string(
     result
 }
 
-fn human_readable_number(size: u64) -> String {
-    for (i, u) in UNITS.iter().enumerate() {
-        let marker = 1024u64.pow((UNITS.len() - i) as u32);
-        if size >= marker {
-            if size / marker < 10 {
-                return format!("{:.1}{}", (size as f32 / marker as f32), u);
-            } else {
-                return format!("{}{}", (size / marker), u);
+fn human_readable_number(size: u64, display_count: bool) -> String {
+    if display_count {
+        use thousands::Separable;
+        size.separate_with_commas()
+    } else {
+        for (i, u) in UNITS.iter().enumerate() {
+            let marker = 1024u64.pow((UNITS.len() - i) as u32);
+            if size >= marker {
+                if size / marker < 10 {
+                    return format!("{:.1}{}", (size as f32 / marker as f32), u);
+                } else {
+                    return format!("{}{}", (size / marker), u);
+                }
             }
         }
+        format!("{}B", size)
     }
-    return format!("{}B", size);
 }
 
 mod tests {
@@ -379,9 +417,11 @@ mod tests {
 
         let s = format_string(
             &n,
+            5,
             indent,
             percent_bar,
             is_biggest,
+            false,
             &get_fake_display_data(6),
         );
         assert_eq!(s, " 4.0K ┌─┴ short");
@@ -400,7 +440,7 @@ mod tests {
         let is_biggest = false;
 
         let dd = get_fake_display_data(64);
-        let s = format_string(&n, indent, percent_bar, is_biggest, &dd);
+        let s = format_string(&n, 5, indent, percent_bar, is_biggest, false, &dd);
         assert_eq!(
             s,
             " 4.0K ┌─┴ very_long_name_longer_than_the_eighty_character_limit_very_lon.."
@@ -409,15 +449,31 @@ mod tests {
 
     #[test]
     fn test_human_readable_number() {
-        assert_eq!(human_readable_number(1), "1B");
-        assert_eq!(human_readable_number(956), "956B");
-        assert_eq!(human_readable_number(1004), "1004B");
-        assert_eq!(human_readable_number(1024), "1.0K");
-        assert_eq!(human_readable_number(1536), "1.5K");
-        assert_eq!(human_readable_number(1024 * 512), "512K");
-        assert_eq!(human_readable_number(1024 * 1024), "1.0M");
-        assert_eq!(human_readable_number(1024 * 1024 * 1024 - 1), "1023M");
-        assert_eq!(human_readable_number(1024 * 1024 * 1024 * 20), "20G");
-        assert_eq!(human_readable_number(1024 * 1024 * 1024 * 1024), "1.0T");
+        // Sizes
+        assert_eq!(human_readable_number(1, false), "1B");
+        assert_eq!(human_readable_number(956, false), "956B");
+        assert_eq!(human_readable_number(1004, false), "1004B");
+        assert_eq!(human_readable_number(1024, false), "1.0K");
+        assert_eq!(human_readable_number(1536, false), "1.5K");
+        assert_eq!(human_readable_number(1024 * 512, false), "512K");
+        assert_eq!(human_readable_number(1024 * 1024, false), "1.0M");
+        assert_eq!(
+            human_readable_number(1024 * 1024 * 1024 - 1, false),
+            "1023M"
+        );
+        assert_eq!(human_readable_number(1024 * 1024 * 1024 * 20, false), "20G");
+        assert_eq!(
+            human_readable_number(1024 * 1024 * 1024 * 1024, false),
+            "1.0T"
+        );
+
+        // Counts
+        assert_eq!(human_readable_number(1, true), "1");
+        assert_eq!(human_readable_number(10, true), "10");
+        assert_eq!(human_readable_number(100, true), "100");
+        assert_eq!(human_readable_number(1_000, true), "1,000");
+        assert_eq!(human_readable_number(10_000, true), "10,000");
+        assert_eq!(human_readable_number(100_000, true), "100,000");
+        assert_eq!(human_readable_number(1_000_000, true), "1,000,000");
     }
 }
