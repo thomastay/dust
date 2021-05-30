@@ -1,20 +1,16 @@
-#[macro_use]
-extern crate clap;
-extern crate crossbeam_channel as channel;
-extern crate ignore;
-extern crate unicode_width;
-extern crate walkdir;
+#![allow(missing_docs)] // don't publish a crate with this!
+#![warn(clippy::pedantic)]
+#![deny(rust_2018_idioms)]
+#![deny(clippy::too_many_arguments)]
+#![deny(clippy::complexity)]
+#![deny(clippy::perf)]
+#![forbid(unsafe_code)]
 
-use self::display::draw_it;
-use crate::utils::is_a_parent_of;
-use clap::{App, AppSettings, Arg};
+use clap::{crate_version, value_t, App, AppSettings, Arg};
+use du_dust::{build_tree, display, find_big_ones, get_dir_tree, simplify_dir_names, sort};
 use std::cmp::max;
 use std::path::PathBuf;
 use terminal_size::{terminal_size, Height, Width};
-use utils::{find_big_ones, get_dir_tree, simplify_dir_names, sort, Node};
-
-mod display;
-mod utils;
 
 static DEFAULT_NUMBER_OF_LINES: usize = 30;
 static DEFAULT_TERMINAL_WIDTH: usize = 80;
@@ -62,6 +58,7 @@ fn get_width_of_terminal() -> usize {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let default_height = get_height_of_terminal();
     let def_num_str = default_height.to_string();
@@ -161,18 +158,14 @@ fn main() {
         }
     };
 
-    let number_of_lines = match value_t!(options.value_of("number_of_lines"), usize) {
-        Ok(v) => v,
-        Err(_) => {
+    let number_of_lines =
+        value_t!(options.value_of("number_of_lines"), usize).unwrap_or_else(|_| {
             eprintln!("Ignoring bad value for number_of_lines");
             default_height
-        }
-    };
+        });
 
-    let terminal_width = match value_t!(options.value_of("width"), usize) {
-        Ok(v) => v,
-        Err(_) => get_width_of_terminal(),
-    };
+    let terminal_width =
+        value_t!(options.value_of("width"), usize).unwrap_or_else(|_| get_width_of_terminal());
 
     let depth = options.value_of("depth").and_then(|depth| {
         depth
@@ -189,10 +182,9 @@ fn main() {
     let no_colors = init_color(options.is_present("no_colors"));
     let use_apparent_size = options.is_present("display_apparent_size");
     let limit_filesystem = options.is_present("limit_filesystem");
-    let ignore_directories = match options.values_of("ignore_directory") {
-        Some(i) => Some(i.map(PathBuf::from).collect()),
-        None => None,
-    };
+    let ignore_directories = options
+        .values_of("ignore_directory")
+        .map(|i| i.map(PathBuf::from).collect());
     let by_filecount = options.is_present("by_filecount");
     let show_hidden = !options.is_present("ignore_hidden");
 
@@ -200,60 +192,35 @@ fn main() {
     let (errors, nodes) = get_dir_tree(
         &simplified_dirs,
         &ignore_directories,
-        use_apparent_size,
-        limit_filesystem,
-        by_filecount,
-        show_hidden,
+        &du_dust::DirTreeOpts {
+            use_apparent_size,
+            limit_filesystem,
+            by_filecount,
+            show_hidden,
+        },
     );
-    let sorted_data = sort(nodes);
+    let sorted_data = sort(&nodes);
     let biggest_ones = {
         match depth {
             None => find_big_ones(sorted_data, number_of_lines),
             Some(_) => sorted_data,
         }
     };
-    let tree = build_tree(biggest_ones, depth);
+    let root_node = build_tree(biggest_ones, depth);
+    let use_full_path = options.is_present("display_full_paths");
+    let is_reversed = !options.is_present("reverse");
+    let no_percents = options.is_present("no_bars");
 
-    draw_it(
-        errors,
-        options.is_present("display_full_paths"),
-        !options.is_present("reverse"),
-        no_colors,
-        options.is_present("no_bars"),
-        terminal_width,
-        by_filecount,
-        tree,
+    display::draw_it(
+        &errors,
+        &root_node,
+        &display::DrawOpts {
+            use_full_path,
+            is_reversed,
+            no_colors,
+            no_percents,
+            terminal_width,
+            by_filecount,
+        },
     );
-}
-
-fn build_tree(biggest_ones: Vec<(PathBuf, u64)>, depth: Option<usize>) -> Node {
-    let mut top_parent = Node::default();
-
-    // assume sorted order
-    for b in biggest_ones {
-        let n = Node {
-            name: b.0,
-            size: b.1,
-            children: Vec::default(),
-        };
-        recursively_build_tree(&mut top_parent, n, depth);
-    }
-    top_parent
-}
-
-fn recursively_build_tree(parent_node: &mut Node, new_node: Node, depth: Option<usize>) {
-    let new_depth = match depth {
-        None => None,
-        Some(0) => return,
-        Some(d) => Some(d - 1),
-    };
-    if let Some(c) = parent_node
-        .children
-        .iter_mut()
-        .find(|c| is_a_parent_of(&c.name, &new_node.name))
-    {
-        recursively_build_tree(c, new_node, new_depth);
-    } else {
-        parent_node.children.push(new_node);
-    }
 }

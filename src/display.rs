@@ -1,8 +1,6 @@
-extern crate ansi_term;
+use crate::{Errors, Node};
 
-use crate::utils::{Errors, Node};
-
-use self::ansi_term::Colour::Red;
+use ansi_term::Colour::Red;
 use lscolors::{LsColors, Style};
 
 use unicode_width::UnicodeWidthStr;
@@ -32,6 +30,7 @@ pub struct DisplayData {
 
 impl DisplayData {
     fn get_tree_chars(&self, was_i_last: bool, has_children: bool) -> &'static str {
+        #[allow(clippy::match_same_arms)]
         match (self.is_reversed, was_i_last, has_children) {
             (true, true, true) => "┌─┴",
             (true, true, false) => "┌──",
@@ -105,52 +104,59 @@ impl DrawData<'_> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn draw_it(
-    errors: Errors,
-    use_full_path: bool,
-    is_reversed: bool,
-    no_colors: bool,
-    no_percents: bool,
-    terminal_width: usize,
-    by_filecount: bool,
-    root_node: Node,
-) {
+pub struct DrawOpts {
+    pub use_full_path: bool,
+    pub is_reversed: bool,
+    pub no_colors: bool,
+    pub no_percents: bool,
+    pub terminal_width: usize,
+    pub by_filecount: bool,
+}
+
+pub fn draw_it(errors: &Errors, root_node: &Node, draw_opts: &DrawOpts) {
     if errors.permissions {
         eprintln!("Did not have permissions for all directories");
     }
     if errors.not_found {
         eprintln!("Not all directories were found");
     }
-    let num_chars_needed_on_left_most = if by_filecount {
+    let num_chars_needed_on_left_most = if draw_opts.by_filecount {
         let max_size = root_node.children.iter().map(|n| n.size).fold(0, max);
         max_size.separate_with_commas().chars().count()
     } else {
         5 // Under normal usage we need 5 chars to display the size of a directory
     };
 
-    let terminal_width = terminal_width - 9 - num_chars_needed_on_left_most;
+    let terminal_width = draw_opts.terminal_width - 9 - num_chars_needed_on_left_most;
     let num_indent_chars = 3;
     let longest_string_length = root_node
         .children
         .iter()
-        .map(|c| find_longest_dir_name(&c, num_indent_chars, terminal_width, !use_full_path))
+        .map(|c| {
+            find_longest_dir_name(
+                &c,
+                num_indent_chars,
+                terminal_width,
+                !draw_opts.use_full_path,
+            )
+        })
         .fold(0, max);
 
-    let max_bar_length = if no_percents || longest_string_length >= terminal_width as usize {
-        0
-    } else {
-        terminal_width as usize - longest_string_length
-    };
+    let max_bar_length =
+        if draw_opts.no_percents || longest_string_length >= terminal_width as usize {
+            0
+        } else {
+            terminal_width as usize - longest_string_length
+        };
 
     let first_size_bar = repeat(BLOCKS[0]).take(max_bar_length).collect::<String>();
 
-    for c in root_node.get_children_from_node(is_reversed) {
+    for c in root_node.get_children_from_node(draw_opts.is_reversed) {
         let display_data = DisplayData {
-            short_paths: !use_full_path,
-            is_reversed,
-            colors_on: !no_colors,
-            by_filecount,
+            short_paths: !draw_opts.use_full_path,
+            is_reversed: draw_opts.is_reversed,
+            colors_on: !draw_opts.no_colors,
+            by_filecount: draw_opts.by_filecount,
             num_chars_needed_on_left_most,
             base_size: c.size,
             longest_string_length,
@@ -161,7 +167,7 @@ pub fn draw_it(
             percent_bar: first_size_bar.clone(),
             display_data: &display_data,
         };
-        display_node(c, &draw_data, true, true);
+        display_node(&c, &draw_data, true, true);
     }
 }
 
@@ -179,7 +185,7 @@ fn find_longest_dir_name(node: &Node, indent: usize, terminal: usize, long_paths
         .fold(longest, max)
 }
 
-fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: bool) {
+fn display_node(node: &Node, draw_data: &DrawData<'_>, is_biggest: bool, is_last: bool) {
     // hacky way of working out how deep we are in the tree
     let indent = draw_data.get_new_indent(!node.children.is_empty(), is_last);
     let level = ((indent.chars().count() - 1) / 2) - 1;
@@ -211,7 +217,7 @@ fn display_node(node: Node, draw_data: &DrawData, is_biggest: bool, is_last: boo
     {
         let is_biggest = dd.display_data.is_biggest(count, num_siblings);
         let was_i_last = dd.display_data.is_last(count, num_siblings);
-        display_node(c, &dd, is_biggest, was_i_last);
+        display_node(&c, &dd, is_biggest, was_i_last);
     }
 
     if draw_data.display_data.is_reversed {
@@ -299,15 +305,15 @@ fn get_name_percent(
     bar_chart: &str,
     display_data: &DisplayData,
 ) -> (String, String) {
-    if !bar_chart.is_empty() {
+    if bar_chart.is_empty() {
+        let n = get_printable_name(&node.name, display_data.short_paths);
+        let name = maybe_trim_filename(n, display_data);
+        ("".into(), name)
+    } else {
         let percent_size_str = format!("{:.0}%", display_data.percent_size(node) * 100.0);
         let percents = format!("│{} │ {:>4}", bar_chart, percent_size_str);
         let name_and_padding = pad_or_trim_filename(node, indent, display_data);
         (percents, name_and_padding)
-    } else {
-        let n = get_printable_name(&node.name, display_data.short_paths);
-        let name = maybe_trim_filename(n, display_data);
-        ("".into(), name)
     }
 }
 
@@ -345,13 +351,12 @@ fn get_pretty_name(node: &Node, name_and_padding: String, display_data: &Display
 
 fn human_readable_number(size: u64) -> String {
     for (i, u) in UNITS.iter().enumerate() {
-        let marker = 1024u64.pow((UNITS.len() - i) as u32);
+        let marker = 1024_u64.pow((UNITS.len() - i) as u32);
         if size >= marker {
             if size / marker < 10 {
                 return format!("{:.1}{}", (size as f32 / marker as f32), u);
-            } else {
-                return format!("{}{}", (size / marker), u);
             }
+            return format!("{}{}", (size / marker), u);
         }
     }
     return format!("{}B", size);
