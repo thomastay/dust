@@ -3,6 +3,8 @@ use std::fs;
 
 use ignore::DirEntry;
 
+pub type INode = (u64, u64);
+
 #[cfg(target_family = "unix")]
 fn get_block_size() -> u64 {
     // All os specific implementations of MetatdataExt seem to define a block as 512 bytes
@@ -11,7 +13,8 @@ fn get_block_size() -> u64 {
 }
 
 #[cfg(target_family = "unix")]
-pub fn get_metadata(d: &DirEntry, use_apparent_size: bool) -> Option<(u64, Option<(u64, u64)>)> {
+/// Returns the size, and the inode of the direntry.
+pub fn get_metadata(d: &DirEntry, use_apparent_size: bool) -> Option<(u64, Option<INode>)> {
     use std::os::unix::fs::MetadataExt;
     match d.metadata() {
         Ok(md) => {
@@ -26,7 +29,7 @@ pub fn get_metadata(d: &DirEntry, use_apparent_size: bool) -> Option<(u64, Optio
 }
 
 #[cfg(target_family = "windows")]
-pub fn get_metadata(d: &DirEntry, _use_apparent_size: bool) -> Option<(u64, Option<(u64, u64)>)> {
+pub fn get_metadata(d: &DirEntry, _use_apparent_size: bool) -> Option<(u64, Option<INode>)> {
     // On windows opening the file to get size, file ID and volume can be very
     // expensive because 1) it causes a few system calls, and more importantly 2) it can cause
     // windows defender to scan the file.

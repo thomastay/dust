@@ -11,7 +11,8 @@ use stfu8::encode_u8;
 use thousands::Separable;
 use unicode_width::UnicodeWidthStr;
 
-use crate::{Errors, Node};
+use crate::walk_dirs::Errors;
+use crate::Node;
 
 static UNITS: [char; 4] = ['T', 'G', 'M', 'K'];
 static BLOCKS: [char; 5] = ['█', '▓', '▒', '░', ' '];

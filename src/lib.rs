@@ -15,17 +15,16 @@
 use std::{
     cmp,
     collections::{HashMap, HashSet},
-    path::{Component, Path, PathBuf},
-    sync::atomic::{self, AtomicBool},
-    thread,
+    path::{Path, PathBuf},
 };
-
-use ignore::{WalkBuilder, WalkState};
 
 pub mod display;
 mod platform;
+pub mod walk_dirs;
 
-type PathData = (PathBuf, u64, Option<(u64, u64)>);
+type PathData = (PathBuf, u64, Option<platform::INode>);
+
+// ======================= Given the HashMap of Dir Entries, build a tree out of it ===================
 
 pub fn build_tree(biggest_ones: Vec<(PathBuf, u64)>, depth: Option<usize>) -> Node {
     let mut top_parent = Node::default();
@@ -42,7 +41,7 @@ pub fn build_tree(biggest_ones: Vec<(PathBuf, u64)>, depth: Option<usize>) -> No
     top_parent
 }
 
-pub fn recursively_build_tree(parent_node: &mut Node, new_node: Node, depth: Option<usize>) {
+fn recursively_build_tree(parent_node: &mut Node, new_node: Node, depth: Option<usize>) {
     let new_depth = match depth {
         None => None,
         Some(0) => return,
@@ -59,33 +58,11 @@ pub fn recursively_build_tree(parent_node: &mut Node, new_node: Node, depth: Opt
     }
 }
 
-#[derive(Debug, Default, Eq, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Node {
-    pub name: PathBuf,
     pub size: u64,
+    pub name: PathBuf,
     pub children: Vec<Node>,
-}
-
-impl Ord for Node {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        if self.size == other.size {
-            self.name.cmp(&other.name)
-        } else {
-            self.size.cmp(&other.size)
-        }
-    }
-}
-
-impl PartialOrd for Node {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for Node {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.size == other.size && self.children == other.children
-    }
 }
 
 impl Node {
@@ -103,12 +80,7 @@ impl Node {
     }
 }
 
-pub struct Errors {
-    pub permissions: bool,
-    pub not_found: bool,
-}
-
-pub fn is_a_parent_of<P: AsRef<Path>>(parent: P, child: P) -> bool {
+fn is_a_parent_of<P: AsRef<Path>>(parent: P, child: P) -> bool {
     let parent = parent.as_ref();
     let child = child.as_ref();
     child.starts_with(parent) && !parent.starts_with(child)
@@ -140,158 +112,6 @@ pub fn simplify_dir_names<P: AsRef<Path>>(filenames: Vec<P>) -> HashSet<PathBuf>
     top_level_names
 }
 
-fn prepare_walk_dir_builder<P: AsRef<Path>>(
-    top_level_names: &HashSet<P>,
-    limit_filesystem: bool,
-    show_hidden: bool,
-) -> WalkBuilder {
-    let mut it = top_level_names.iter();
-    let mut builder = WalkBuilder::new(it.next().unwrap());
-    builder.follow_links(false);
-    if show_hidden {
-        builder.hidden(false);
-        builder.ignore(false);
-        builder.git_global(false);
-        builder.git_ignore(false);
-        builder.git_exclude(false);
-    }
-
-    if limit_filesystem {
-        builder.same_file_system(true);
-    }
-
-    for b in it {
-        builder.add(b);
-    }
-    builder
-}
-
-fn is_not_found(e: &ignore::Error) -> bool {
-    use ignore::Error;
-    if let Error::WithPath { err, .. } = e {
-        if let Error::Io(e) = &**err {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Opts for get_dir_tree
-pub struct DirTreeOpts {
-    pub use_apparent_size: bool,
-    pub limit_filesystem: bool,
-    pub by_filecount: bool,
-    pub show_hidden: bool,
-}
-
-/// Gets the directory tree for a given path.
-/// # Panics
-/// Panics if txc fails to send, which shouldn't happen,
-/// and also in case the threads fail to join, which shouldn't happen too.
-pub fn get_dir_tree<P: AsRef<Path>>(
-    top_level_names: &HashSet<P>,
-    ignore_directories: &Option<Vec<PathBuf>>,
-    opts: &DirTreeOpts,
-) -> (Errors, HashMap<PathBuf, u64>) {
-    let (tx, rx) = crossbeam_channel::bounded::<PathData>(1000);
-
-    let permissions_flag = AtomicBool::new(false);
-    let not_found_flag = AtomicBool::new(false);
-
-    let t2 = top_level_names
-        .iter()
-        .map(|p| p.as_ref().to_path_buf())
-        .collect();
-
-    let t = create_reader_thread(rx, t2, opts.use_apparent_size);
-    let walk_dir_builder =
-        prepare_walk_dir_builder(top_level_names, opts.limit_filesystem, opts.show_hidden);
-
-    walk_dir_builder.build_parallel().run(|| {
-        let txc = tx.clone();
-        let pf = &permissions_flag;
-        let nf = &not_found_flag;
-        Box::new(move |path| {
-            match path {
-                Ok(p) => {
-                    if let Some(dirs) = ignore_directories {
-                        let path = p.path();
-                        let parts = path.components().collect::<Vec<Component<'_>>>();
-                        for d in dirs {
-                            if parts
-                                .windows(d.components().count())
-                                .any(|window| window.iter().collect::<PathBuf>() == *d)
-                            {
-                                return WalkState::Continue;
-                            }
-                        }
-                    }
-
-                    let maybe_size_and_inode = platform::get_metadata(&p, opts.use_apparent_size);
-
-                    match maybe_size_and_inode {
-                        Some(data) => {
-                            let (size, inode_device) =
-                                if opts.by_filecount { (1, data.1) } else { data };
-                            txc.send((p.into_path(), size, inode_device)).unwrap();
-                        }
-                        None => {
-                            pf.store(true, atomic::Ordering::Relaxed);
-                        }
-                    }
-                }
-                Err(e) => {
-                    if is_not_found(&e) {
-                        nf.store(true, atomic::Ordering::Relaxed);
-                    } else {
-                        pf.store(true, atomic::Ordering::Relaxed);
-                    }
-                }
-            };
-            WalkState::Continue
-        })
-    });
-
-    drop(tx);
-    let data = t.join().unwrap();
-    let errors = Errors {
-        permissions: permissions_flag.load(atomic::Ordering::SeqCst),
-        not_found: not_found_flag.load(atomic::Ordering::SeqCst),
-    };
-    (errors, data)
-}
-
-fn create_reader_thread(
-    rx: crossbeam_channel::Receiver<PathData>,
-    top_level_names: HashSet<PathBuf>,
-    use_apparent_size: bool,
-) -> thread::JoinHandle<HashMap<PathBuf, u64>> {
-    // Receiver thread
-    thread::spawn(move || {
-        let mut hash: HashMap<PathBuf, u64> = HashMap::new();
-        let mut inodes: HashSet<(u64, u64)> = HashSet::new();
-
-        for dent in rx {
-            let (path, size, maybe_inode_device) = dent;
-
-            if should_ignore_file(use_apparent_size, &mut inodes, maybe_inode_device) {
-                continue;
-            }
-            for p in path.ancestors() {
-                let s = hash.entry(p.to_path_buf()).or_insert(0);
-                *s += size;
-
-                if top_level_names.contains(p) {
-                    break;
-                }
-            }
-        }
-        hash
-    })
-}
-
 pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     // normalize path ...
     // 1. removing repeated separators
@@ -300,27 +120,6 @@ pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     // * `Path.components()` does all the above work; ref: <https://doc.rust-lang.org/std/path/struct.Path.html#method.components>
     // 4. changing to os preferred separator (automatically done by recollecting components back into a PathBuf)
     path.as_ref().components().collect::<PathBuf>()
-}
-
-fn should_ignore_file(
-    use_apparent_size: bool,
-    inodes: &mut HashSet<(u64, u64)>,
-    maybe_inode_device: Option<(u64, u64)>,
-) -> bool {
-    match maybe_inode_device {
-        None => false,
-        Some(data) => {
-            let (inode, device) = data;
-            if !use_apparent_size {
-                // Ignore files already visited or symlinked
-                if inodes.contains(&(inode, device)) {
-                    return true;
-                }
-                inodes.insert((inode, device));
-            }
-            false
-        }
-    }
 }
 
 pub fn sort_by_size_first_name_second(a: &(PathBuf, u64), b: &(PathBuf, u64)) -> cmp::Ordering {
@@ -425,30 +224,5 @@ mod tests {
         assert!(is_a_parent_of("/", "/usr/andy"));
         assert!(is_a_parent_of("/", "/usr"));
         assert!(!is_a_parent_of("/", "/"));
-    }
-
-    #[test]
-    fn test_should_ignore_file() {
-        let mut files = HashSet::new();
-        files.insert((10, 20));
-
-        assert!(!should_ignore_file(true, &mut files, Some((0, 0))));
-
-        // New file is not known it will be inserted to the hashmp and should not be ignored
-        assert!(!should_ignore_file(false, &mut files, Some((11, 12))));
-        assert!(files.contains(&(11, 12)));
-
-        // The same file will be ignored the second time
-        assert!(should_ignore_file(false, &mut files, Some((11, 12))));
-    }
-
-    #[test]
-    fn test_should_ignore_file_on_different_device() {
-        let mut files = HashSet::new();
-        files.insert((10, 20));
-
-        // We do not ignore files on the same device
-        assert!(!should_ignore_file(false, &mut files, Some((2, 99))));
-        assert!(!should_ignore_file(true, &mut files, Some((2, 99))));
     }
 }

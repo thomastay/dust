@@ -9,7 +9,10 @@
 use std::{cmp::max, path::PathBuf};
 
 use clap::{crate_version, value_t, App, AppSettings, Arg};
-use du_dust::{build_tree, display, find_big_ones, get_dir_tree, simplify_dir_names, sort};
+use du_dust::{
+    build_tree, display, find_big_ones, simplify_dir_names, sort, walk_dirs::get_dir_tree,
+    walk_dirs::DirTreeOpts,
+};
 use terminal_size::{terminal_size, Height, Width};
 
 static DEFAULT_NUMBER_OF_LINES: usize = 30;
@@ -192,7 +195,7 @@ fn main() {
     let (errors, nodes) = get_dir_tree(
         &simplified_dirs,
         &ignore_directories,
-        &du_dust::DirTreeOpts {
+        &DirTreeOpts {
             use_apparent_size,
             limit_filesystem,
             by_filecount,
