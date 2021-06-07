@@ -72,7 +72,8 @@ fn main() {
                 .short("d")
                 .long("depth")
                 .help("Depth to show")
-                .takes_value(true),
+                .takes_value(true)
+                .conflicts_with("number_of_lines"),
         )
         .arg(
             Arg::with_name("number_of_lines")
@@ -147,7 +148,6 @@ fn main() {
                 .number_of_values(1)
                 .help("Specify width of output overriding the auto detection of terminal width"),
         )
-
         .arg(Arg::with_name("inputs").multiple(true))
         .get_matches();
 
@@ -158,14 +158,16 @@ fn main() {
         }
     };
 
-    let number_of_lines =
-        value_t!(options.value_of("number_of_lines"), usize).unwrap_or_else(|_| {
-            eprintln!("Ignoring bad value for number_of_lines");
-            default_height
-        });
+    let number_of_lines = value_t!(options, "number_of_lines", usize).unwrap_or_else(|e| {
+        eprintln!(
+            "{}Ignoring bad value for number_of_lines, and using default height {}",
+            e, default_height
+        );
+        default_height
+    });
 
     let terminal_width =
-        value_t!(options.value_of("width"), usize).unwrap_or_else(|_| get_width_of_terminal());
+        value_t!(options, "width", usize).unwrap_or_else(|_| get_width_of_terminal());
 
     let depth = options.value_of("depth").and_then(|depth| {
         depth
@@ -174,10 +176,6 @@ fn main() {
             .map_err(|_| eprintln!("Ignoring bad value for depth"))
             .ok()
     });
-    if options.is_present("depth") && number_of_lines != default_height {
-        eprintln!("Use either -n or -d. Not both");
-        return;
-    }
 
     let no_colors = init_color(options.is_present("no_colors"));
     let use_apparent_size = options.is_present("display_apparent_size");
@@ -187,6 +185,8 @@ fn main() {
         .map(|i| i.map(PathBuf::from).collect());
     let by_filecount = options.is_present("by_filecount");
     let show_hidden = !options.is_present("ignore_hidden");
+
+    // Run Dust.
 
     let simplified_dirs = simplify_dir_names(target_dirs);
     let (errors, nodes) = get_dir_tree(

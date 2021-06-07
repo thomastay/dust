@@ -12,21 +12,18 @@
 #![deny(clippy::missing_panics_doc)]
 #![deny(clippy::fn_params_excessive_bools)]
 
-pub mod display;
-mod platform;
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-
-use crossbeam_channel::Receiver;
-use std::thread::JoinHandle;
+use std::{
+    cmp,
+    collections::{HashMap, HashSet},
+    path::{Component, Path, PathBuf},
+    sync::atomic::{self, AtomicBool},
+    thread,
+};
 
 use ignore::{WalkBuilder, WalkState};
-use std::sync::atomic;
-use std::thread;
+
+pub mod display;
+mod platform;
 
 type PathData = (PathBuf, u64, Option<(u64, u64)>);
 
@@ -70,7 +67,7 @@ pub struct Node {
 }
 
 impl Ord for Node {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         if self.size == other.size {
             self.name.cmp(&other.name)
         } else {
@@ -80,7 +77,7 @@ impl Ord for Node {
 }
 
 impl PartialOrd for Node {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -267,10 +264,10 @@ pub fn get_dir_tree<P: AsRef<Path>>(
 }
 
 fn create_reader_thread(
-    rx: Receiver<PathData>,
+    rx: crossbeam_channel::Receiver<PathData>,
     top_level_names: HashSet<PathBuf>,
     use_apparent_size: bool,
-) -> JoinHandle<HashMap<PathBuf, u64>> {
+) -> thread::JoinHandle<HashMap<PathBuf, u64>> {
     // Receiver thread
     thread::spawn(move || {
         let mut hash: HashMap<PathBuf, u64> = HashMap::new();
@@ -326,9 +323,9 @@ fn should_ignore_file(
     }
 }
 
-pub fn sort_by_size_first_name_second(a: &(PathBuf, u64), b: &(PathBuf, u64)) -> Ordering {
+pub fn sort_by_size_first_name_second(a: &(PathBuf, u64), b: &(PathBuf, u64)) -> cmp::Ordering {
     let result = b.1.cmp(&a.1);
-    if result == Ordering::Equal {
+    if result == cmp::Ordering::Equal {
         a.0.cmp(&b.0)
     } else {
         result

@@ -2,7 +2,6 @@ use assert_cmd::Command;
 use std::cmp::max;
 use std::fs::File;
 use std::io::Write;
-use std::panic;
 use std::path::PathBuf;
 use std::str;
 

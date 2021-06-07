@@ -21,14 +21,12 @@ fn copy_test_data(dir: &str) {
     // First remove the existing directory - just incase it is there and has incorrect data
     let last_slash = dir.rfind('/').unwrap();
     let last_part_of_dir = dir.chars().skip(last_slash).collect::<String>();
-    match Command::new("rm")
+    if Command::new("rm")
         .arg("-rf")
         .arg("/tmp/".to_owned() + &*last_part_of_dir)
         .ok()
-    {
-        Ok(_) => {}
-        Err(_) => {}
-    };
+        .is_ok()
+    {};
     match Command::new("cp").arg("-r").arg(dir).arg("/tmp/").ok() {
         Ok(_) => {}
         Err(err) => {

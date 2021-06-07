@@ -362,6 +362,7 @@ fn human_readable_number(size: u64) -> String {
     return format!("{}B", size);
 }
 
+#[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use super::*;
