@@ -1,18 +1,17 @@
-use crate::{Errors, Node};
+use std::{
+    cmp::{max, min},
+    fs,
+    iter::repeat,
+    path::Path,
+};
 
 use ansi_term::Colour::Red;
 use lscolors::{LsColors, Style};
-
+use stfu8::encode_u8;
+use thousands::Separable;
 use unicode_width::UnicodeWidthStr;
 
-use stfu8::encode_u8;
-
-use std::cmp::max;
-use std::cmp::min;
-use std::fs;
-use std::iter::repeat;
-use std::path::Path;
-use thousands::Separable;
+use crate::{Errors, Node};
 
 static UNITS: [char; 4] = ['T', 'G', 'M', 'K'];
 static BLOCKS: [char; 5] = ['█', '▓', '▒', '░', ' '];

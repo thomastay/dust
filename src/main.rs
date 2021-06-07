@@ -6,10 +6,10 @@
 #![deny(clippy::perf)]
 #![forbid(unsafe_code)]
 
+use std::{cmp::max, path::PathBuf};
+
 use clap::{crate_version, value_t, App, AppSettings, Arg};
 use du_dust::{build_tree, display, find_big_ones, get_dir_tree, simplify_dir_names, sort};
-use std::cmp::max;
-use std::path::PathBuf;
 use terminal_size::{terminal_size, Height, Width};
 
 static DEFAULT_NUMBER_OF_LINES: usize = 30;

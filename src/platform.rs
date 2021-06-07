@@ -1,6 +1,7 @@
-use ignore::DirEntry;
 #[allow(unused_imports)]
 use std::fs;
+
+use ignore::DirEntry;
 
 #[cfg(target_family = "unix")]
 fn get_block_size() -> u64 {
