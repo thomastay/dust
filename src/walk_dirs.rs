@@ -1,15 +1,13 @@
 //! # Reading and building the directory entries
 //! These functions recurse through the file system, and create a HashMap of Nodes.
 
-use crossbeam_channel::Sender;
-use ignore::{ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
+use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::path::{self, Path};
-use std::sync::atomic::{self, AtomicBool};
-use std::thread;
+use std::sync::Mutex;
 
-use crate::{platform, PathData};
+use crate::platform;
 
 /// Opts for get_dir_tree
 #[derive(Clone)]
@@ -34,49 +32,59 @@ pub struct Errors {
 /// # Panics
 /// Panics if txc fails to send, which shouldn't happen,
 /// and also in case the threads fail to join, which shouldn't happen too.
-pub fn get_dir_tree<P: AsRef<Path>>(
-    top_level_names: &HashSet<P>,
+pub fn get_dir_tree(
+    top_level_names: &HashSet<PathBuf>,
     ignore_directories: &Option<Vec<PathBuf>>,
     opts: &DirTreeOpts,
 ) -> (Errors, HashMap<PathBuf, u64>) {
     // Create a channel, setup a receiver thread, then run walk_tree on the directory recursively in parallel,
     // then collect the results.
-    let (tx, rx) = crossbeam_channel::bounded::<PathData>(1000);
+    // let (tx, rx) = crossbeam_channel::bounded::<WalkDirChannelData>(1000);
+    let final_results: Mutex<Vec<WalkDirChannelData>> = Mutex::new(Default::default());
 
-    let permissions_flag = AtomicBool::new(false);
-    let not_found_flag = AtomicBool::new(false);
+    // let permissions_flag = AtomicBool::new(false);
+    // let not_found_flag = AtomicBool::new(false);
 
-    let t2 = top_level_names
-        .iter()
-        .map(|p| p.as_ref().to_path_buf())
-        .collect();
+    // let t2: HashSet<PathBuf> = top_level_names
+    //     .iter()
+    //     .map(|p| p.as_ref().to_path_buf())
+    //     .collect();
 
-    let reader_thread = create_reader_thread(rx, t2, opts.use_apparent_size);
+    // let reader_thread = create_reader_thread(rx, t2, opts.use_apparent_size);
     let walk_dir_builder =
         prepare_walk_dir_builder(top_level_names, opts.limit_filesystem, opts.show_hidden);
 
-    walk_dir_builder.build_parallel().run(|| {
-        let reader_channel = tx.clone();
-        let permissions_flag = &permissions_flag;
-        let not_found_flag = &not_found_flag;
-        Box::new(move |path| {
-            walk_tree(
-                path,
-                &reader_channel,
-                ignore_directories,
-                opts,
-                permissions_flag,
-                not_found_flag,
-            )
-        })
-    });
+    // walk_dir_builder.build_parallel().run(|| {
+    //     let reader_channel = tx.clone();
+    //     let permissions_flag = &permissions_flag;
+    //     let not_found_flag = &not_found_flag;
+    //     Box::new(move |path| {
+    //         walk_tree(
+    //             path,
+    //             &reader_channel,
+    //             ignore_directories,
+    //             opts,
+    //             permissions_flag,
+    //             not_found_flag,
+    //         )
+    //     })
+    // });
+    walk_dir_builder
+        .build_parallel()
+        .visit(&mut WalkDirBuilder {
+            final_results: &final_results,
+            opts: opts.clone(),
+            ignore_directories: ignore_directories.as_ref(),
+        });
 
-    drop(tx);
-    let data = reader_thread.join().unwrap();
-    let errors = Errors {
-        permissions: permissions_flag.load(atomic::Ordering::SeqCst),
-        not_found: not_found_flag.load(atomic::Ordering::SeqCst),
-    };
+    // drop(tx);
+    // let data = reader_thread.join().unwrap();
+    // let errors = Errors {
+    //     permissions: permissions_flag.load(atomic::Ordering::SeqCst),
+    //     not_found: not_found_flag.load(atomic::Ordering::SeqCst),
+    // };
+    let final_results = final_results.lock().unwrap();
+    let (data, errors) = handle_results(&final_results, top_level_names, opts.use_apparent_size);
     (errors, data)
 }
 
@@ -107,10 +115,10 @@ fn prepare_walk_dir_builder<P: AsRef<Path>>(
     builder
 }
 
-type WalkDirChannel = Sender<(Vec<crate::PathData>, Errors)>;
+type WalkDirChannelData = (Vec<crate::PathData>, Errors);
 
 struct WalkDirBuilder<'s> {
-    reader_channel: WalkDirChannel,
+    final_results: &'s Mutex<Vec<WalkDirChannelData>>,
     opts: DirTreeOpts,
     ignore_directories: Option<&'s Vec<PathBuf>>,
 }
@@ -118,7 +126,7 @@ struct WalkDirBuilder<'s> {
 impl<'s> ParallelVisitorBuilder<'s> for WalkDirBuilder<'s> {
     fn build(&mut self) -> Box<dyn ParallelVisitor + 's> {
         Box::new(WalkDirVisitor {
-            reader_channel: self.reader_channel.clone(),
+            final_results: self.final_results,
             ignore_directories: self.ignore_directories,
             opts: self.opts.clone(),
             results: Vec::new(),
@@ -127,16 +135,16 @@ impl<'s> ParallelVisitorBuilder<'s> for WalkDirBuilder<'s> {
     }
 }
 
-struct WalkDirVisitor<'a> {
-    reader_channel: WalkDirChannel,
-    ignore_directories: Option<&'a Vec<PathBuf>>,
+struct WalkDirVisitor<'s> {
+    final_results: &'s Mutex<Vec<WalkDirChannelData>>,
+    ignore_directories: Option<&'s Vec<PathBuf>>,
     opts: DirTreeOpts,
     errors: Errors,
     results: Vec<crate::PathData>,
 }
 
 impl ParallelVisitor for WalkDirVisitor<'_> {
-    fn visit(&mut self, entry: Result<ignore::DirEntry, ignore::Error>) -> WalkState {
+    fn visit(&mut self, entry: Result<DirEntry, ignore::Error>) -> WalkState {
         match entry {
             Ok(p) => {
                 if let Some(dirs) = &self.ignore_directories {
@@ -177,74 +185,83 @@ impl ParallelVisitor for WalkDirVisitor<'_> {
 impl<'a> Drop for WalkDirVisitor<'a> {
     fn drop(&mut self) {
         // Move results out of self. Safe, since this is in a drop.
-        let mut results = Vec::new();
-        std::mem::swap(&mut results, &mut self.results);
+        let results = std::mem::take(&mut self.results);
         let errors = self.errors.clone();
+        let to_push = (results, errors);
 
-        self.reader_channel.send((results, errors)).unwrap();
+        let mut final_results = self.final_results.lock().unwrap();
+        (*final_results).push(to_push);
     }
 }
 
 /// Walks the directory tree. The inner implementation of the walker.
-fn walk_tree(
-    entry: Result<ignore::DirEntry, ignore::Error>,
-    reader_channel: &crossbeam_channel::Sender<crate::PathData>,
-    ignore_directories: &Option<Vec<PathBuf>>,
-    opts: &DirTreeOpts,
-    permissions_flag: &AtomicBool,
-    not_found_flag: &AtomicBool,
-) -> ignore::WalkState {
-    match entry {
-        Ok(p) => {
-            if let Some(dirs) = ignore_directories {
-                let parts: Vec<path::Component<'_>> = p.path().components().collect();
-                if dirs.iter().any(|d| {
-                    parts
-                        .windows(d.components().count())
-                        .any(|window| window.iter().collect::<PathBuf>() == *d)
-                }) {
-                    return WalkState::Continue;
-                }
-            }
-            // At this point, the direntry we received is not ignored. So, send it to the receiver thread.
-            match platform::get_metadata(&p, opts.use_apparent_size) {
-                Some(data) => {
-                    let inode = data.1;
-                    let size = if opts.by_filecount { 1 } else { data.0 };
-                    reader_channel.send((p.into_path(), size, inode)).unwrap();
-                }
-                None => {
-                    // Since we cannot get the metadata, we must have faced a permissions error.
-                    permissions_flag.store(true, atomic::Ordering::Relaxed);
-                }
-            }
-        }
-        Err(e) => {
-            if is_not_found(&e) {
-                not_found_flag.store(true, atomic::Ordering::Relaxed);
-            } else {
-                permissions_flag.store(true, atomic::Ordering::Relaxed);
-            }
-        }
-    };
-    WalkState::Continue
-}
+// fn walk_tree(
+//     entry: Result<ignore::DirEntry, ignore::Error>,
+//     reader_channel: &crossbeam_channel::Sender<crate::PathData>,
+//     ignore_directories: &Option<Vec<PathBuf>>,
+//     opts: &DirTreeOpts,
+//     permissions_flag: &AtomicBool,
+//     not_found_flag: &AtomicBool,
+// ) -> ignore::WalkState {
+//     match entry {
+//         Ok(p) => {
+//             if let Some(dirs) = ignore_directories {
+//                 let parts: Vec<path::Component<'_>> = p.path().components().collect();
+//                 if dirs.iter().any(|d| {
+//                     parts
+//                         .windows(d.components().count())
+//                         .any(|window| window.iter().collect::<PathBuf>() == *d)
+//                 }) {
+//                     return WalkState::Continue;
+//                 }
+//             }
+//             // At this point, the direntry we received is not ignored. So, send it to the receiver thread.
+//             match platform::get_metadata(&p, opts.use_apparent_size) {
+//                 Some(data) => {
+//                     let inode = data.1;
+//                     let size = if opts.by_filecount { 1 } else { data.0 };
+//                     reader_channel.send((p.into_path(), size, inode)).unwrap();
+//                 }
+//                 None => {
+//                     // Since we cannot get the metadata, we must have faced a permissions error.
+//                     permissions_flag.store(true, atomic::Ordering::Relaxed);
+//                 }
+//             }
+//         }
+//         Err(e) => {
+//             if is_not_found(&e) {
+//                 not_found_flag.store(true, atomic::Ordering::Relaxed);
+//             } else {
+//                 permissions_flag.store(true, atomic::Ordering::Relaxed);
+//             }
+//         }
+//     };
+//     WalkState::Continue
+// }
 
-/// Creates the reader thread
-fn create_reader_thread(
-    rx: crossbeam_channel::Receiver<PathData>,
-    top_level_names: HashSet<PathBuf>,
+/// Reads from the channel and create a hashmap
+fn handle_results(
+    final_results: &[WalkDirChannelData],
+    top_level_names: &HashSet<PathBuf>,
     use_apparent_size: bool,
-) -> thread::JoinHandle<HashMap<PathBuf, u64>> {
-    // Receiver thread
-    thread::spawn(move || {
-        let mut hash: HashMap<PathBuf, u64> = HashMap::new();
-        let mut inodes: HashSet<(u64, u64)> = HashSet::new();
+) -> (HashMap<PathBuf, u64>, Errors) {
+    let mut hash: HashMap<PathBuf, u64> = HashMap::new();
+    let mut inodes: HashSet<(u64, u64)> = HashSet::new();
+    let mut errors: Errors = Default::default();
 
-        for dent in rx {
+    for (dents, errors_rx) in final_results {
+        // merge errors
+        if errors_rx.not_found {
+            errors.not_found = true;
+        }
+        if errors_rx.permissions {
+            errors.permissions = true;
+        }
+        // Merge paths
+        for dent in dents {
             let (path, size, maybe_inode_device) = dent;
 
-            if should_ignore_file(use_apparent_size, &mut inodes, maybe_inode_device) {
+            if should_ignore_file(use_apparent_size, &mut inodes, *maybe_inode_device) {
                 continue;
             }
             for p in path.ancestors() {
@@ -256,9 +273,39 @@ fn create_reader_thread(
                 }
             }
         }
-        hash
-    })
+    }
+    (hash, errors)
 }
+
+// /// Creates the reader thread
+// fn create_reader_thread(
+//     rx: crossbeam_channel::Receiver<PathData>,
+//     top_level_names: HashSet<PathBuf>,
+//     use_apparent_size: bool,
+// ) -> thread::JoinHandle<HashMap<PathBuf, u64>> {
+//     // Receiver thread
+//     thread::spawn(move || {
+//         let mut hash: HashMap<PathBuf, u64> = HashMap::new();
+//         let mut inodes: HashSet<(u64, u64)> = HashSet::new();
+
+//         for dent in rx {
+//             let (path, size, maybe_inode_device) = dent;
+
+//             if should_ignore_file(use_apparent_size, &mut inodes, maybe_inode_device) {
+//                 continue;
+//             }
+//             for p in path.ancestors() {
+//                 let s = hash.entry(p.to_path_buf()).or_insert(0);
+//                 *s += size;
+
+//                 if top_level_names.contains(p) {
+//                     break;
+//                 }
+//             }
+//         }
+//         hash
+//     })
+// }
 
 fn should_ignore_file(
     use_apparent_size: bool,
