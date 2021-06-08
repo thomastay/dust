@@ -192,7 +192,7 @@ fn main() {
     // Run Dust.
 
     let simplified_dirs = simplify_dir_names(target_dirs);
-    let (errors, nodes) = get_dir_tree(
+    let (nodes, errors) = get_dir_tree(
         &simplified_dirs,
         &ignore_directories,
         &DirTreeOpts {

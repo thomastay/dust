@@ -13,7 +13,6 @@
 #![deny(clippy::fn_params_excessive_bools)]
 
 use std::{
-    cmp,
     collections::HashMap,
     collections::HashSet,
     path::{Path, PathBuf},
@@ -23,8 +22,6 @@ pub mod display;
 mod platform;
 pub mod tree;
 pub mod walk_dirs;
-
-type PathData = (PathBuf, u64, Option<platform::INode>);
 
 pub fn simplify_dir_names<P: AsRef<Path>>(filenames: Vec<P>) -> HashSet<PathBuf> {
     let mut top_level_names: HashSet<PathBuf> = HashSet::with_capacity(filenames.len());
@@ -58,36 +55,39 @@ pub(crate) fn is_a_parent_of<P: AsRef<Path>>(parent: P, child: P) -> bool {
     child.starts_with(parent) && !parent.starts_with(child)
 }
 
-fn sort_by_size_first_name_second(a: &(PathBuf, u64), b: &(PathBuf, u64)) -> cmp::Ordering {
-    let result = b.1.cmp(&a.1);
-    if result == cmp::Ordering::Equal {
-        a.0.cmp(&b.0)
-    } else {
-        result
-    }
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct FileSize {
+    pub(crate) size: u64,
+    pub(crate) filename: PathBuf,
 }
 
-pub fn sort_into_vec(nodes: HashMap<PathBuf, u64>) -> Vec<(PathBuf, u64)> {
-    let mut new_l: Vec<(PathBuf, u64)> = nodes.into_iter().collect();
-    new_l.sort_unstable_by(sort_by_size_first_name_second);
+pub fn sort_into_vec(nodes: HashMap<PathBuf, u64>) -> Vec<FileSize> {
+    let mut new_l = nodes
+        .into_iter()
+        .map(|(k, v)| FileSize {
+            size: v,
+            filename: k,
+        })
+        .collect::<Vec<_>>();
+    new_l.sort_unstable();
     new_l
 }
 
-pub fn find_big_ones(new_l: Vec<(PathBuf, u64)>, max_to_show: usize) -> Vec<(PathBuf, u64)> {
-    if max_to_show > 0 && new_l.len() > max_to_show {
-        new_l[0..max_to_show].to_vec()
+pub fn find_big_ones(nodes: Vec<FileSize>, max_to_show: usize) -> Vec<FileSize> {
+    if max_to_show > 0 && nodes.len() > max_to_show {
+        nodes[0..max_to_show].to_vec()
     } else {
-        new_l
+        nodes
     }
 }
 
+/// Normalizes the path, by:
+/// 1. removing repeated separators.
+/// 2. removing interior '.' ("current directory") path segments.
+/// 3. removing trailing extra separators and '.' ("current directory") path segments.
+///    Note: `Path.components()` does all the above work; ref: <https://doc.rust-lang.org/std/path/struct.Path.html#method.components>
+/// 4. changing to os preferred separator (automatically done by recollecting components back into a PathBuf).
 fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
-    // normalize path ...
-    // 1. removing repeated separators
-    // 2. removing interior '.' ("current directory") path segments
-    // 3. removing trailing extra separators and '.' ("current directory") path segments
-    // * `Path.components()` does all the above work; ref: <https://doc.rust-lang.org/std/path/struct.Path.html#method.components>
-    // 4. changing to os preferred separator (automatically done by recollecting components back into a PathBuf)
     path.as_ref().components().collect::<PathBuf>()
 }
 

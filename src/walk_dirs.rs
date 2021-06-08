@@ -8,6 +8,7 @@ use std::path::{self, Path};
 use std::sync::Mutex;
 
 use crate::platform;
+type PathData = (PathBuf, u64, Option<platform::INode>);
 
 /// Opts for get_dir_tree
 #[derive(Clone)]
@@ -36,7 +37,7 @@ pub fn get_dir_tree(
     top_level_names: &HashSet<PathBuf>,
     ignore_directories: &Option<Vec<PathBuf>>,
     opts: &DirTreeOpts,
-) -> (Errors, HashMap<PathBuf, u64>) {
+) -> (HashMap<PathBuf, u64>, Errors) {
     let final_results: Mutex<Vec<WalkDirChannelData>> = Mutex::new(Default::default());
     let walk_dir_builder =
         prepare_walk_dir_builder(top_level_names, opts.limit_filesystem, opts.show_hidden);
@@ -50,8 +51,7 @@ pub fn get_dir_tree(
         });
 
     let final_results = final_results.lock().unwrap();
-    let (data, errors) = handle_results(&final_results, top_level_names, opts.use_apparent_size);
-    (errors, data)
+    handle_results(&final_results, top_level_names, opts.use_apparent_size)
 }
 
 /// Creates a WalkBuilder from the options.
@@ -81,7 +81,7 @@ fn prepare_walk_dir_builder<P: AsRef<Path>>(
     builder
 }
 
-type WalkDirChannelData = (Vec<crate::PathData>, Errors);
+type WalkDirChannelData = (Vec<PathData>, Errors);
 
 struct WalkDirBuilder<'s> {
     final_results: &'s Mutex<Vec<WalkDirChannelData>>,
@@ -106,7 +106,7 @@ struct WalkDirVisitor<'s> {
     ignore_directories: Option<&'s Vec<PathBuf>>,
     opts: DirTreeOpts,
     errors: Errors,
-    results: Vec<crate::PathData>,
+    results: Vec<PathData>,
 }
 
 impl ParallelVisitor for WalkDirVisitor<'_> {
