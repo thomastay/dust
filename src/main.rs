@@ -10,8 +10,8 @@ use std::{cmp::max, path::PathBuf};
 
 use clap::{crate_version, value_t, App, AppSettings, Arg};
 use du_dust::{
-    build_tree, display, find_big_ones, simplify_dir_names, sort, walk_dirs::get_dir_tree,
-    walk_dirs::DirTreeOpts,
+    display, find_big_ones, simplify_dir_names, sort_into_vec, tree,
+    walk_dirs::{get_dir_tree, DirTreeOpts},
 };
 use terminal_size::{terminal_size, Height, Width};
 
@@ -202,26 +202,23 @@ fn main() {
             show_hidden,
         },
     );
-    let sorted_data = sort(&nodes);
+    let nodes = sort_into_vec(nodes);
     let biggest_ones = {
         match depth {
-            None => find_big_ones(sorted_data, number_of_lines),
-            Some(_) => sorted_data,
+            None => find_big_ones(nodes, number_of_lines),
+            Some(_) => nodes,
         }
     };
-    let root_node = build_tree(biggest_ones, depth);
-    let use_full_path = options.is_present("display_full_paths");
-    let is_reversed = !options.is_present("reverse");
-    let no_percents = options.is_present("no_bars");
+    let root_node = tree::build(biggest_ones, depth);
 
-    display::draw_it(
-        &errors,
+    display::display(
         &root_node,
+        &errors,
         &display::DrawOpts {
-            use_full_path,
-            is_reversed,
+            use_full_path: options.is_present("display_full_paths"),
+            is_reversed: !options.is_present("reverse"),
+            no_percents: options.is_present("no_bars"),
             no_colors,
-            no_percents,
             terminal_width,
             by_filecount,
         },

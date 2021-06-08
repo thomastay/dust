@@ -11,8 +11,8 @@ use stfu8::encode_u8;
 use thousands::Separable;
 use unicode_width::UnicodeWidthStr;
 
+use crate::tree::Node;
 use crate::walk_dirs::Errors;
-use crate::Node;
 
 static UNITS: [char; 4] = ['T', 'G', 'M', 'K'];
 static BLOCKS: [char; 5] = ['█', '▓', '▒', '░', ' '];
@@ -113,7 +113,7 @@ pub struct DrawOpts {
     pub by_filecount: bool,
 }
 
-pub fn draw_it(errors: &Errors, root_node: &Node, draw_opts: &DrawOpts) {
+pub fn display(root_node: &Node, errors: &Errors, draw_opts: &DrawOpts) {
     if errors.permissions {
         eprintln!("Did not have permissions for all directories");
     }
