@@ -4,6 +4,7 @@
 #![deny(clippy::complexity)]
 #![deny(clippy::perf)]
 #![forbid(unsafe_code)]
+#![warn(clippy::style)]
 // select lints from clippy::pedantic
 #![deny(clippy::needless_pass_by_value)]
 #![deny(clippy::explicit_iter_loop)]

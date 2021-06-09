@@ -40,10 +40,14 @@ pub fn get_dir_tree(
     let final_results: Mutex<Vec<WalkDirChannelData>> = Mutex::new(Vec::new());
     let walk_builder = prepare_walk_builder(top_level_names, opts);
 
-    walk_builder.build_parallel().visit(&mut WalkDirBuilder {
-        final_results: &final_results,
-        opts: opts.clone(),
-        ignore_directories: ignore_directories.as_ref(),
+    walk_builder.build_parallel().visit(&mut FnBuilder {
+        builder: || WalkDirVisitor {
+            final_results: &final_results,
+            ignore_directories: ignore_directories.as_ref(),
+            opts,
+            results: Vec::new(),
+            errors: Default::default(),
+        },
     });
 
     let final_results = final_results.lock().unwrap();
@@ -73,28 +77,24 @@ fn prepare_walk_builder(top_level_names: &HashSet<PathBuf>, opts: &DirTreeOpts) 
     builder
 }
 
-struct WalkDirBuilder<'s> {
-    final_results: &'s Mutex<Vec<WalkDirChannelData>>,
-    opts: DirTreeOpts,
-    ignore_directories: Option<&'s Vec<PathBuf>>,
+/// The following FnBuilder and WalkDirVisitor are to satisfy the visit API.
+
+/// FnBuilder and its implementation is stolen from ignore's crate.
+struct FnBuilder<F> {
+    builder: F,
 }
 
-impl<'s> ParallelVisitorBuilder<'s> for WalkDirBuilder<'s> {
+// don't worry too much about this signature, it just says that F is a closure returning a WalkDirVisitor
+impl<'s, F: FnMut() -> WalkDirVisitor<'s>> ParallelVisitorBuilder<'s> for FnBuilder<F> {
     fn build(&mut self) -> Box<dyn ParallelVisitor + 's> {
-        Box::new(WalkDirVisitor {
-            final_results: self.final_results,
-            ignore_directories: self.ignore_directories,
-            opts: self.opts.clone(),
-            results: Vec::new(),
-            errors: Default::default(),
-        })
+        Box::new((self.builder)())
     }
 }
 
 struct WalkDirVisitor<'s> {
     final_results: &'s Mutex<Vec<WalkDirChannelData>>,
     ignore_directories: Option<&'s Vec<PathBuf>>,
-    opts: DirTreeOpts,
+    opts: &'s DirTreeOpts,
     errors: Errors,
     results: Vec<PathData>,
 }
@@ -113,7 +113,7 @@ impl ParallelVisitor for WalkDirVisitor<'_> {
                         return WalkState::Continue;
                     }
                 }
-                // At this point, the direntry we received is not ignored. So, send it to the receiver thread.
+                // At this point, the direntry we received is not ignored. So, push it into the results vec
                 match platform::get_metadata(&p, self.opts.use_apparent_size) {
                     Some(data) => {
                         let inode = data.1;
@@ -145,6 +145,7 @@ impl<'a> Drop for WalkDirVisitor<'a> {
         let errors = self.errors.clone();
         let to_push = (results, errors);
 
+        // push the collated results into the global final_results vec.
         let mut final_results = self.final_results.lock().unwrap();
         (*final_results).push(to_push);
     }
@@ -169,18 +170,16 @@ fn handle_results(
             errors.permissions = true;
         }
         // Merge paths
-        for dent in dents {
-            let (path, size, maybe_inode_device) = dent;
-
-            if should_ignore_file(use_apparent_size, &mut inodes, *maybe_inode_device) {
+        for (path, size, maybe_inode_device) in dents {
+            if should_ignore_file(use_apparent_size, &mut inodes, maybe_inode_device) {
                 continue;
             }
             for p in path.ancestors() {
-                let s = hash.entry(p.to_path_buf()).or_insert(0);
-                *s += size;
+                let curr_size = hash.entry(p.to_path_buf()).or_insert(0);
+                *curr_size += size;
 
                 if top_level_names.contains(p) {
-                    break;
+                    break; // why the break??
                 }
             }
         }
@@ -191,22 +190,22 @@ fn handle_results(
 fn should_ignore_file(
     use_apparent_size: bool,
     inodes: &mut HashSet<(u64, u64)>,
-    maybe_inode_device: Option<(u64, u64)>,
+    maybe_inode_device: &Option<(u64, u64)>,
 ) -> bool {
-    match maybe_inode_device {
-        None => false,
-        Some(data) => {
-            let (inode, device) = data;
-            if !use_apparent_size {
+    // if use_apparent_size is true, we always return false.
+    !use_apparent_size
+        && match maybe_inode_device {
+            None => false,
+            Some(inode_device) => {
                 // Ignore files already visited or symlinked
-                if inodes.contains(&(inode, device)) {
-                    return true;
+                if inodes.contains(inode_device) {
+                    true
+                } else {
+                    inodes.insert(*inode_device);
+                    false
                 }
-                inodes.insert((inode, device));
             }
-            false
         }
-    }
 }
 
 fn is_not_found(e: &ignore::Error) -> bool {
@@ -229,14 +228,14 @@ mod test {
         let mut files = HashSet::new();
         files.insert((10, 20));
 
-        assert!(!should_ignore_file(true, &mut files, Some((0, 0))));
+        assert!(!should_ignore_file(true, &mut files, &Some((0, 0))));
 
         // New file is not known it will be inserted to the hashmp and should not be ignored
-        assert!(!should_ignore_file(false, &mut files, Some((11, 12))));
+        assert!(!should_ignore_file(false, &mut files, &Some((11, 12))));
         assert!(files.contains(&(11, 12)));
 
         // The same file will be ignored the second time
-        assert!(should_ignore_file(false, &mut files, Some((11, 12))));
+        assert!(should_ignore_file(false, &mut files, &Some((11, 12))));
     }
 
     #[test]
@@ -245,7 +244,7 @@ mod test {
         files.insert((10, 20));
 
         // We do not ignore files on the same device
-        assert!(!should_ignore_file(false, &mut files, Some((2, 99))));
-        assert!(!should_ignore_file(true, &mut files, Some((2, 99))));
+        assert!(!should_ignore_file(false, &mut files, &Some((2, 99))));
+        assert!(!should_ignore_file(true, &mut files, &Some((2, 99))));
     }
 }
