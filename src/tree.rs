@@ -1,7 +1,7 @@
 //! # Given the HashMap of Dir Entries, build a tree out of it
 use std::path::PathBuf;
 
-pub fn build(biggest_ones: Vec<(PathBuf, u64)>, depth: Option<usize>) -> Node {
+pub fn build(biggest_ones: Vec<crate::FileSize>, depth: Option<usize>) -> Node {
     fn rec(parent_node: &mut Node, new_node: Node, depth: Option<usize>) {
         let new_depth = match depth {
             None => None,
@@ -24,8 +24,8 @@ pub fn build(biggest_ones: Vec<(PathBuf, u64)>, depth: Option<usize>) -> Node {
     // assume sorted order
     for b in biggest_ones {
         let n = Node {
-            name: b.0,
-            size: b.1,
+            name: b.filename,
+            size: b.size,
             children: Vec::default(),
         };
         rec(&mut top_parent, n, depth);
