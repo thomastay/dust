@@ -3,8 +3,7 @@
 
 use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::path::{self, Path};
+use std::path::{self, PathBuf};
 use std::sync::Mutex;
 
 use crate::platform;
@@ -39,25 +38,20 @@ pub fn get_dir_tree(
     opts: &DirTreeOpts,
 ) -> (HashMap<PathBuf, u64>, Errors) {
     let final_results: Mutex<Vec<WalkDirChannelData>> = Mutex::new(Vec::new());
-    let walk_dir_builder = prepare_walk_dir_builder(top_level_names, opts);
+    let walk_builder = prepare_walk_builder(top_level_names, opts);
 
-    walk_dir_builder
-        .build_parallel()
-        .visit(&mut WalkDirBuilder {
-            final_results: &final_results,
-            opts: opts.clone(),
-            ignore_directories: ignore_directories.as_ref(),
-        });
+    walk_builder.build_parallel().visit(&mut WalkDirBuilder {
+        final_results: &final_results,
+        opts: opts.clone(),
+        ignore_directories: ignore_directories.as_ref(),
+    });
 
     let final_results = final_results.lock().unwrap();
     handle_results(&final_results, top_level_names, opts.use_apparent_size)
 }
 
 /// Creates a WalkBuilder from the options.
-fn prepare_walk_dir_builder<P: AsRef<Path>>(
-    top_level_names: &HashSet<P>,
-    opts: &DirTreeOpts,
-) -> WalkBuilder {
+fn prepare_walk_builder(top_level_names: &HashSet<PathBuf>, opts: &DirTreeOpts) -> WalkBuilder {
     let mut it = top_level_names.iter();
     let mut builder = WalkBuilder::new(it.next().unwrap());
     builder.follow_links(false);
