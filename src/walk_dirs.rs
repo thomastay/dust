@@ -3,7 +3,7 @@
 
 use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
 use std::collections::{HashMap, HashSet};
-use std::path::{self, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::platform;
@@ -34,7 +34,7 @@ type WalkDirChannelData = (Vec<PathData>, Errors);
 /// Panics if the mutex is poisoned.
 pub fn get_dir_tree(
     top_level_names: &HashSet<PathBuf>,
-    ignore_directories: &Option<Vec<PathBuf>>,
+    ignore_directories: Option<&Vec<PathBuf>>,
     opts: &DirTreeOpts,
 ) -> (HashMap<PathBuf, u64>, Errors) {
     let final_results: Mutex<Vec<WalkDirChannelData>> = Mutex::new(Vec::new());
@@ -43,7 +43,7 @@ pub fn get_dir_tree(
     walk_builder.build_parallel().visit(&mut FnBuilder {
         builder: || WalkDirVisitor {
             final_results: &final_results,
-            ignore_directories: ignore_directories.as_ref(),
+            ignore_directories,
             opts,
             results: Vec::new(),
             errors: Default::default(),
@@ -78,8 +78,10 @@ fn prepare_walk_builder(top_level_names: &HashSet<PathBuf>, opts: &DirTreeOpts) 
 }
 
 /// The following FnBuilder and WalkDirVisitor are to satisfy the visit API.
-
-/// FnBuilder and its implementation is stolen from ignore's crate.
+/// FnBuilder and its implementation are taken from ignore's crate.
+///
+/// FnBuilder is useless here, it exists solely to satisfy the API, and just returns the WalkDirVisitor,
+/// which is the main implementation.
 struct FnBuilder<F> {
     builder: F,
 }
@@ -103,8 +105,8 @@ impl ParallelVisitor for WalkDirVisitor<'_> {
     fn visit(&mut self, entry: Result<DirEntry, ignore::Error>) -> WalkState {
         match entry {
             Ok(p) => {
-                if let Some(dirs) = &self.ignore_directories {
-                    let parts: Vec<path::Component<'_>> = p.path().components().collect();
+                if let Some(dirs) = self.ignore_directories {
+                    let parts = p.path().components().collect::<Vec<_>>();
                     if dirs.iter().any(|d| {
                         parts
                             .windows(d.components().count())

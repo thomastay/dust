@@ -59,8 +59,13 @@ pub(crate) fn is_a_parent_of<P: AsRef<Path>>(parent: P, child: P) -> bool {
 
 #[derive(Clone)]
 pub struct FileSize {
-    pub(crate) size: u64,
     pub(crate) filename: PathBuf,
+    pub(crate) size: u64,
+}
+impl FileSize {
+    fn new((filename, size): (PathBuf, u64)) -> FileSize {
+        FileSize { filename, size }
+    }
 }
 
 pub fn sort_into_vec(nodes: HashMap<PathBuf, u64>) -> Vec<FileSize> {
@@ -73,13 +78,7 @@ pub fn sort_into_vec(nodes: HashMap<PathBuf, u64>) -> Vec<FileSize> {
             result
         }
     }
-    let mut new_l = nodes
-        .into_iter()
-        .map(|(k, v)| FileSize {
-            size: v,
-            filename: k,
-        })
-        .collect::<Vec<_>>();
+    let mut new_l = nodes.into_iter().map(FileSize::new).collect::<Vec<_>>();
     new_l.sort_unstable_by(reverse_size_then_filename);
     new_l
 }

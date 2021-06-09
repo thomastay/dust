@@ -183,7 +183,7 @@ fn main() {
     let no_colors = init_color(options.is_present("no_colors"));
     let use_apparent_size = options.is_present("display_apparent_size");
     let limit_filesystem = options.is_present("limit_filesystem");
-    let ignore_directories = options
+    let ignore_directories: Option<Vec<PathBuf>> = options
         .values_of("ignore_directory")
         .map(|i| i.map(PathBuf::from).collect());
     let by_filecount = options.is_present("by_filecount");
@@ -194,7 +194,7 @@ fn main() {
     let simplified_dirs = simplify_dir_names(target_dirs);
     let (nodes, errors) = get_dir_tree(
         &simplified_dirs,
-        &ignore_directories,
+        ignore_directories.as_ref(),
         &DirTreeOpts {
             use_apparent_size,
             limit_filesystem,
